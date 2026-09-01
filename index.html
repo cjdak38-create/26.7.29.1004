@@ -341,7 +341,7 @@
                 }
             }
 
-            // Button Click SFX
+            // Button Click Click SFX
             playClick() {
                 if (!this.enabled) return;
                 this.init();
@@ -1034,4 +1034,402 @@
                 }
 
                 this.updatePhysics();
-                this.renderer
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+
+        // =========================================================
+        // MAIN APP CONTROLLER & SUSPENSE TICKER LOGIC
+        // =========================================================
+        let machine = null;
+        let autoDrawInterval = null;
+        let historyData = [];
+
+        window.onload = function() {
+            machine = new Lotto3DMachine('canvasContainer');
+            renderNumberGrid();
+            updateStats();
+            setupUIEvents();
+        };
+
+        function renderNumberGrid() {
+            const grid = document.getElementById('numberGrid');
+            grid.innerHTML = '';
+
+            for (let i = 1; i <= 29; i++) {
+                const isExtracted = machine ? machine.drawnNumbers.includes(i) : false;
+                const colors = getBallColorStyle(i);
+
+                const item = document.createElement('div');
+                item.id = `num-badge-${i}`;
+                item.className = `p-2 rounded-xl border text-center font-black text-xs transition-all duration-300 flex flex-col items-center justify-center ${
+                    isExtracted 
+                        ? 'bg-slate-900 border-slate-800 text-slate-600 scale-90 opacity-40 line-through' 
+                        : `${colors.bg} ${colors.border} ${colors.text} hover:scale-105 shadow-md`
+                }`;
+                item.innerHTML = `<span>${i}</span>`;
+                grid.appendChild(item);
+            }
+
+            const remCount = document.getElementById('remainingCountText');
+            if (remCount && machine) {
+                remCount.innerText = `남은 공: ${29 - machine.drawnNumbers.length}개`;
+            }
+        }
+
+        function getBallColorStyle(num) {
+            if (num <= 10) return { bg: 'bg-amber-500/10', border: 'border-amber-500/40', text: 'text-amber-400', mainBg: 'bg-gradient-to-tr from-amber-500 via-yellow-400 to-amber-600' };
+            if (num <= 20) return { bg: 'bg-cyan-500/10', border: 'border-cyan-500/40', text: 'text-cyan-400', mainBg: 'bg-gradient-to-tr from-cyan-500 via-blue-400 to-cyan-600' };
+            return { bg: 'bg-purple-500/10', border: 'border-purple-500/40', text: 'text-purple-400', mainBg: 'bg-gradient-to-tr from-purple-500 via-pink-500 to-fuchsia-600' };
+        }
+
+        function updateStats() {
+            if (!machine) return;
+            const nums = machine.drawnNumbers;
+            if (nums.length === 0) {
+                document.getElementById('oddEvenStat').innerText = '0 : 0';
+                document.getElementById('sumStat').innerText = '0';
+                document.getElementById('avgStat').innerText = '0.0';
+                return;
+            }
+
+            const odds = nums.filter(n => n % 2 !== 0).length;
+            const evens = nums.length - odds;
+            const sum = nums.reduce((a, b) => a + b, 0);
+            const avg = (sum / nums.length).toFixed(1);
+
+            document.getElementById('oddEvenStat').innerText = `${odds} : ${evens}`;
+            document.getElementById('sumStat').innerText = `${sum}`;
+            document.getElementById('avgStat').innerText = `${avg}`;
+        }
+
+        function setupUIEvents() {
+            const soundBtn = document.getElementById('soundToggleBtn');
+            const bgmBtn = document.getElementById('bgmToggleBtn');
+            const drawAutoBtn = document.getElementById('drawAutoBtn');
+            const drawOneBtn = document.getElementById('drawOneBtn');
+            const mixBtn = document.getElementById('mixBtn');
+            const resetBtn = document.getElementById('resetAllBtn');
+            const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+
+            // Sound Toggle
+            soundBtn.addEventListener('click', () => {
+                soundEngine.playClick();
+                soundEngine.enabled = !soundEngine.enabled;
+                const icon = document.getElementById('soundIcon');
+                const label = document.getElementById('soundLabel');
+                if (soundEngine.enabled) {
+                    icon.className = 'fas fa-volume-high text-amber-400';
+                    label.innerText = '효과음 ON';
+                } else {
+                    icon.className = 'fas fa-volume-xmark text-slate-500';
+                    label.innerText = '효과음 OFF';
+                }
+            });
+
+            // BGM Toggle
+            bgmBtn.addEventListener('click', () => {
+                soundEngine.playClick();
+                const active = soundEngine.toggleBGM();
+                const icon = document.getElementById('bgmIcon');
+                const label = document.getElementById('bgmLabel');
+                if (active) {
+                    icon.className = 'fas fa-music text-purple-400 animate-bounce';
+                    label.innerText = 'BGM ON';
+                } else {
+                    icon.className = 'fas fa-music text-slate-500';
+                    label.innerText = 'BGM OFF';
+                }
+            });
+
+            // Mix
+            mixBtn.addEventListener('click', () => {
+                soundEngine.playClick();
+                machine.isMixing = true;
+                machine.balls.forEach(b => {
+                    if (!b.isExtracted) {
+                        b.vel.set(
+                            (Math.random() - 0.5) * 0.5,
+                            (Math.random() - 0.5) * 0.5,
+                            (Math.random() - 0.5) * 0.5
+                        );
+                    }
+                });
+                updateStatusText('공들을 격렬하게 혼합하는 중...');
+            });
+
+            // Single Draw
+            drawOneBtn.addEventListener('click', () => {
+                soundEngine.playClick();
+                if (machine.drawnNumbers.length >= 7) {
+                    updateStatusText('이미 7개 번호(6개+보너스)가 완료되었습니다!');
+                    return;
+                }
+                executeSingleDraw();
+            });
+
+            // Auto Draw
+            drawAutoBtn.addEventListener('click', () => {
+                soundEngine.playClick();
+                if (machine.drawnNumbers.length >= 7) {
+                    resetDrawState();
+                }
+
+                drawAutoBtn.disabled = true;
+                drawOneBtn.disabled = true;
+                drawAutoBtn.classList.add('opacity-50', 'cursor-not-allowed');
+
+                updateStatusText('자동 연속 추첨 진행 중...');
+
+                autoDrawInterval = setInterval(() => {
+                    if (machine.drawnNumbers.length >= 7 || machine.isDrawing) {
+                        if (machine.drawnNumbers.length >= 7) {
+                            clearInterval(autoDrawInterval);
+                            drawAutoBtn.disabled = false;
+                            drawOneBtn.disabled = false;
+                            drawAutoBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                        }
+                        return;
+                    }
+                    executeSingleDraw();
+                }, 2000);
+            });
+
+            // Reset
+            resetBtn.addEventListener('click', () => {
+                soundEngine.playClick();
+                resetDrawState();
+            });
+
+            // Clear History
+            clearHistoryBtn.addEventListener('click', () => {
+                soundEngine.playClick();
+                historyData = [];
+                renderHistory();
+            });
+        }
+
+        function executeSingleDraw() {
+            if (machine.isDrawing) return;
+
+            const slotIndex = machine.drawnNumbers.length;
+            const isBonus = slotIndex === 6;
+
+            updateStatusText(isBonus ? '⚡ 보너스 번호 추출!' : `⚡ ${slotIndex + 1}번째 행운 번호 추출 중...`);
+
+            machine.drawSingleBall((finalNum) => {
+                // Suspense Slot Roll Animation Modal
+                showSuspenseRollReveal(finalNum, slotIndex, isBonus, () => {
+                    placeBallInSlot(slotIndex, finalNum, isBonus);
+                    renderNumberGrid();
+                    updateStats();
+
+                    const progressText = document.getElementById('drawProgressText');
+                    if (progressText) progressText.innerText = `${machine.drawnNumbers.length} / 7`;
+
+                    // Confetti Pop on every draw
+                    if (typeof confetti === 'function') {
+                        confetti({
+                            particleCount: isBonus ? 120 : 60,
+                            spread: isBonus ? 100 : 60,
+                            origin: { y: 0.6 }
+                        });
+                    }
+
+                    // Complete round check
+                    if (machine.drawnNumbers.length === 7) {
+                        updateStatusText('🎉 7개 행운의 번호가 모두 완성되었습니다!');
+                        setTimeout(() => {
+                            soundEngine.playFanfare();
+                            if (typeof confetti === 'function') {
+                                confetti({
+                                    particleCount: 200,
+                                    spread: 120,
+                                    origin: { y: 0.5 }
+                                });
+                            }
+                        }, 250);
+
+                        saveToHistory(machine.drawnNumbers);
+                    }
+                });
+            });
+        }
+
+        // SUSPENSE SLOT TICKER MODAL REVEAL
+        function showSuspenseRollReveal(targetNum, slotIndex, isBonus, completionCallback) {
+            const overlay = document.getElementById('revealOverlay');
+            const bigCircle = document.getElementById('bigBallCircle');
+            const bigNum = document.getElementById('bigBallNumber');
+            const bigTag = document.getElementById('bigBallTag');
+            const titleEl = document.getElementById('revealTitle');
+            const subEl = document.getElementById('revealSub');
+
+            const colors = getBallColorStyle(targetNum);
+
+            bigCircle.className = `w-44 h-44 sm:w-56 sm:h-56 rounded-full flex flex-col items-center justify-center text-slate-950 font-black text-6xl sm:text-8xl shadow-2xl z-10 border-4 border-white/90 animate-reveal-super animate-super-glow relative overflow-hidden ${colors.mainBg}`;
+            
+            if (isBonus) {
+                bigTag.innerText = "★ BONUS ★";
+                titleEl.innerText = "✨ 보너스 행운 번호 등장!";
+                titleEl.className = "text-2xl sm:text-4xl font-black text-pink-400 drop-shadow-lg animate-bounce";
+                subEl.innerText = "마지막 행운의 보너스 구슬입니다!";
+            } else {
+                bigTag.innerText = `${slotIndex + 1}번 슬롯`;
+                titleEl.innerText = `✨ ${slotIndex + 1}번째 행운 번호 추첨!`;
+                titleEl.className = "text-2xl sm:text-4xl font-black text-amber-300 drop-shadow-lg";
+                subEl.innerText = "번호판 슬롯에 차곡차곡 누적됩니다";
+            }
+
+            // Show Overlay
+            overlay.classList.remove('opacity-0', 'pointer-events-none', 'scale-95');
+            overlay.classList.add('opacity-100', 'scale-100');
+
+            // Rapid Slot Ticker Roll
+            let counter = 0;
+            const totalTicks = 16;
+            const tickerInterval = setInterval(() => {
+                counter++;
+                const randomNum = Math.floor(Math.random() * 29) + 1;
+                bigNum.innerText = randomNum < 10 ? `0${randomNum}` : randomNum;
+                
+                soundEngine.playTicker();
+
+                if (counter >= totalTicks) {
+                    clearInterval(tickerInterval);
+                    // Snap to target number
+                    bigNum.innerText = targetNum < 10 ? `0${targetNum}` : targetNum;
+                    
+                    if (isBonus) {
+                        titleEl.innerText = `🎉 보너스 번호: ${targetNum}번!`;
+                    } else {
+                        titleEl.innerText = `🎉 ${slotIndex + 1}번째 번호: ${targetNum}번!`;
+                    }
+
+                    soundEngine.playDramaticReveal(isBonus);
+
+                    // Dismiss after reveal
+                    setTimeout(() => {
+                        overlay.classList.remove('opacity-100', 'scale-100');
+                        overlay.classList.add('opacity-0', 'pointer-events-none', 'scale-95');
+
+                        if (completionCallback) completionCallback();
+                    }, 1200);
+                }
+            }, 60);
+        }
+
+        function placeBallInSlot(slotIndex, num, isBonus = false) {
+            const slots = document.querySelectorAll('.ball-slot');
+            if (slotIndex >= slots.length) return;
+
+            const targetSlot = slots[slotIndex];
+            const colors = getBallColorStyle(num);
+
+            targetSlot.innerHTML = `
+                <div class="w-10 h-10 sm:w-12 sm:h-12 rounded-full ${colors.mainBg} text-slate-950 font-black text-sm sm:text-base flex items-center justify-center shadow-lg shadow-black/50 border border-white/50 animate-ball-pop">
+                    ${num}
+                </div>
+            `;
+        }
+
+        function resetDrawState() {
+            if (autoDrawInterval) clearInterval(autoDrawInterval);
+            
+            machine.reset();
+
+            const slots = document.querySelectorAll('.ball-slot');
+            slots.forEach((slot, idx) => {
+                if (idx === 6) {
+                    slot.innerHTML = `<span class="absolute -top-2 text-[9px] font-bold bg-pink-600 text-white px-1.5 py-0.5 rounded-full shadow">보너스</span>`;
+                } else {
+                    slot.innerHTML = '';
+                }
+            });
+
+            const drawAutoBtn = document.getElementById('drawAutoBtn');
+            const drawOneBtn = document.getElementById('drawOneBtn');
+            if (drawAutoBtn) {
+                drawAutoBtn.disabled = false;
+                drawAutoBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+            if (drawOneBtn) {
+                drawOneBtn.disabled = false;
+                drawOneBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+
+            const progressText = document.getElementById('drawProgressText');
+            if (progressText) progressText.innerText = `0 / 7`;
+
+            renderNumberGrid();
+            updateStats();
+            updateStatusText('대기 중 (1~29번 공 준비 완료)');
+        }
+
+        function updateStatusText(text) {
+            const statusEl = document.getElementById('machineStatus');
+            if (statusEl) {
+                statusEl.innerHTML = `<i class="fas fa-sparkles animate-spin text-amber-400 mr-1.5"></i>${text}`;
+            }
+        }
+
+        function saveToHistory(numbers) {
+            const now = new Date();
+            const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+            
+            const mainNumbers = numbers.slice(0, 6).sort((a, b) => a - b);
+            const bonusNumber = numbers[6];
+
+            historyData.unshift({
+                time: timeStr,
+                mains: mainNumbers,
+                bonus: bonusNumber
+            });
+
+            renderHistory();
+        }
+
+        function renderHistory() {
+            const historyList = document.getElementById('historyList');
+            const emptyMsg = document.getElementById('emptyHistoryMsg');
+
+            if (historyData.length === 0) {
+                if (emptyMsg) emptyMsg.classList.remove('hidden');
+                historyList.innerHTML = '';
+                if (emptyMsg) historyList.appendChild(emptyMsg);
+                return;
+            }
+
+            if (emptyMsg) emptyMsg.classList.add('hidden');
+            historyList.innerHTML = '';
+
+            historyData.forEach((item, index) => {
+                const card = document.createElement('div');
+                card.className = 'p-3 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs shadow-md animate-ball-pop';
+
+                let ballsHtml = '<div class="flex items-center gap-1.5 flex-wrap">';
+                item.mains.forEach(num => {
+                    const colors = getBallColorStyle(num);
+                    ballsHtml += `<span class="w-6 h-6 rounded-full ${colors.mainBg} text-slate-950 font-black flex items-center justify-center text-[11px] shadow">${num}</span>`;
+                });
+                
+                // Bonus ball
+                const bonusColors = getBallColorStyle(item.bonus);
+                ballsHtml += `<span class="text-slate-500 font-bold px-0.5">+</span>`;
+                ballsHtml += `<span class="w-6 h-6 rounded-full ${bonusColors.mainBg} text-slate-950 font-black flex items-center justify-center text-[11px] ring-2 ring-pink-500/60 shadow">${item.bonus}</span>`;
+                ballsHtml += '</div>';
+
+                card.innerHTML = `
+                    <div class="flex items-center gap-2">
+                        <span class="font-black text-amber-400">#${historyData.length - index}회차</span>
+                        <span class="text-[10px] text-slate-500">${item.time}</span>
+                    </div>
+                    ${ballsHtml}
+                `;
+
+                historyList.appendChild(card);
+            });
+        }
+    </script>
+</body>
+</html>
